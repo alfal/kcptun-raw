@@ -83,7 +83,7 @@ int pending_stream_len = 0;
 void check_packet_recv(struct packet_info* packetinfo) {
     int saddr_size , size;
     struct sockaddr saddr;
-    unsigned short iphdrlen;
+    unsigned short iphdrlen, tcphdrlen;
 
     struct in_addr from_addr;
 
@@ -116,11 +116,14 @@ void check_packet_recv(struct packet_info* packetinfo) {
         return;
     }
 
+    tcphdrlen = tcph->doff*4;
+
     if (ntohs(tcph->dest) != packetinfo->source_port) {
         return;
     }
 
-    if (packetinfo->is_server == 1 && tcph->syn == 1 && tcph->ack == 0 && tcph->psh == 0) {
+#ifdef SERVER
+    if (tcph->syn == 1 && tcph->ack == 0 && tcph->psh == 0) {
         // Server replies SYN + ACK
         (packetinfo->state).seq = 1;
         (packetinfo->state).ack = 1;
@@ -129,16 +132,19 @@ void check_packet_recv(struct packet_info* packetinfo) {
         send_packet(packetinfo, "", 0, REPLY_SYN_ACK);
         return;
     }
+#endif
 
-    if (packetinfo->is_server == 0 && tcph->syn == 1 && tcph->ack == 1 && tcph->psh == 0) {
+#ifndef SERVER
+    if (tcph->syn == 1 && tcph->ack == 1 && tcph->psh == 0) {
         //Client replies first ACK
         (packetinfo->state).seq = 1;
         (packetinfo->state).ack = 1;
         send_packet(packetinfo, "", 0, REPLY_ACK);
         return;
     }
+#endif
 
-    if(size < sizeof(struct iphdr) + sizeof(struct tcphdr) + 4) {
+    if(size < iphdrlen + tcphdrlen + 4) {
         return;
     }
 
@@ -153,25 +159,25 @@ void check_packet_recv(struct packet_info* packetinfo) {
 
     struct pseudo_header psh;
 
-    int payloadlen = size - tcph->doff*4 - iphdrlen;
+    int payloadlen = size - tcphdrlen - iphdrlen;
 
-    char *pseudogram = malloc(sizeof(struct pseudo_header) + sizeof(struct tcphdr) + payloadlen);
+    char *pseudogram = malloc(sizeof(struct pseudo_header) + tcphdrlen + payloadlen);
 
     psh.source_address = iph->saddr;
     psh.dest_address = iph->daddr;
     psh.placeholder = 0;
     psh.protocol = IPPROTO_TCP;
-    psh.tcp_length = htons(sizeof(struct tcphdr) + payloadlen );
+    psh.tcp_length = htons(tcphdrlen + payloadlen);
 
     memcpy(pseudogram, &psh, sizeof(struct pseudo_header));
     memcpy(pseudogram + sizeof(struct pseudo_header), pseudo_tcp_buffer, size - iphdrlen);
 
-    unsigned short tcp_checksum = csum((short unsigned int*)pseudogram, sizeof(struct pseudo_header) + sizeof(struct tcphdr) + payloadlen);
+    unsigned short tcp_checksum = csum((short unsigned int*)pseudogram, sizeof(struct pseudo_header) + tcphdrlen + payloadlen);
 
     free(pseudogram);
 
     if (tcp_checksum != tcph->check) {
-        // printf("[trans_packet]TCP checksum failed.\n");
+        // LOG("[trans_packet]TCP checksum validation failed, dropping.");
         return;
     }
 
@@ -179,7 +185,7 @@ void check_packet_recv(struct packet_info* packetinfo) {
         (packetinfo->state).ack = __bswap_32(tcph->seq) + payloadlen;
     }
 
-    char* payload = buffer + iphdrlen + tcph->doff*4;
+    char* payload = buffer + iphdrlen + tcphdrlen;
     char* data_payload_buf = payload + 4;
     int data_payload_len = payloadlen - 4;
 
@@ -191,7 +197,7 @@ void check_packet_recv(struct packet_info* packetinfo) {
     unsigned short data_payload_checksum = *((unsigned short*)payload);
 
     if (csum((unsigned short*)data_payload_buf, data_payload_len) != data_payload_checksum) {
-        LOG("[trans_packet]Data checksum verification failed. Dropping.");
+        LOG("[trans_packet]Data checksum validation failed. Dropping.");
         return;
     }
 

@@ -19,6 +19,7 @@
 #include "ikcp.h"
 #include "trans_packet.h"
 
+#include "vector.h"
 #include "common.h"
 
 // #define tcp_listen_port 9999
@@ -44,6 +45,9 @@ int init_server_socket() {
   addr.sin_family = AF_INET;
   addr.sin_port = htons(tcp_listen_port);
   addr.sin_addr.s_addr = INADDR_ANY;
+
+  int option = 1;
+  setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option));
 
   // Bind socket to address
   if (bind(sd, (struct sockaddr*) &addr, sizeof(addr)) != 0) {
@@ -108,6 +112,7 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
 
   LOG("New connection conv %d.", connection->conv);
 
+  vector_add(&open_connections_vector, connection);
 
   struct ev_io *local_read_io = &((connection->read_io).io);
   struct ev_io *local_write_io = &((connection->write_io).io);
@@ -129,8 +134,9 @@ void re_init_kcp_cb(struct ev_loop *loop, struct ev_timer* timer, int revents) {
 int main(int argc, char* argv[]) {
 
   signal(SIGPIPE, SIG_IGN);
-
   srand(time(NULL));
+
+  vector_init(&open_connections_vector);
 
   if (argc < 5) {
     printf("Usage: ./client_bin SERVER_IP SERVER_PORT LOCAL_IP LISTEN_PORT [--mode MODE] [--key KEY] [--noseq]\n");
